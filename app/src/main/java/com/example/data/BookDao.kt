@@ -98,10 +98,10 @@ interface EventDao {
 
 @Dao
 interface UserProfileDao {
-    @Query("SELECT * FROM user_profile WHERE id = 1 LIMIT 1")
+    @Query("SELECT * FROM user_profile LIMIT 1")
     fun getProfile(): Flow<UserProfileEntity?>
 
-    @Query("SELECT * FROM user_profile WHERE id = 1 LIMIT 1")
+    @Query("SELECT * FROM user_profile LIMIT 1")
     suspend fun getProfileSync(): UserProfileEntity?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)

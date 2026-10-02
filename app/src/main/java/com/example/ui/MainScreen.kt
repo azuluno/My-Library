@@ -15,11 +15,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.BookStatus
-import com.example.ui.components.AddBookDialog
-import com.example.ui.components.BookDetailSheet
-import com.example.ui.components.FilterSortBottomSheet
-import com.example.ui.components.LibraryCardDialog
-import com.example.ui.components.ReadingAnalyticsSheet
+import com.example.ui.components.*
 import com.example.ui.screens.*
 import com.example.ui.theme.LibraryForestGreen
 import com.example.ui.theme.LibraryGold
@@ -61,12 +57,26 @@ fun MainScreen(viewModel: MainViewModel) {
     val adaptiveRecommendations by viewModel.adaptiveRecommendations.collectAsStateWithLifecycle()
     val isLoadingRecommendations by viewModel.isLoadingRecommendations.collectAsStateWithLifecycle()
 
+    // Neighborhood Checkouts & In-App Direct Messages
+    val allCheckouts by viewModel.allCheckouts.collectAsStateWithLifecycle()
+    val activeCheckouts by viewModel.activeCheckouts.collectAsStateWithLifecycle()
+    val showNotificationsSheet by viewModel.showNotificationsSheet.collectAsStateWithLifecycle()
+    val showNfcCheckoutDialog by viewModel.showNfcCheckoutDialog.collectAsStateWithLifecycle()
+    val selectedCheckoutForMessage by viewModel.selectedCheckoutForMessage.collectAsStateWithLifecycle()
+    val selectedBookForNfcCheckout by viewModel.selectedBookForNfcCheckout.collectAsStateWithLifecycle()
+    val pendingAlertsCount by viewModel.pendingAlertsCount.collectAsStateWithLifecycle()
+    val hasDismissedWelcomeLogin by viewModel.hasDismissedWelcomeLogin.collectAsStateWithLifecycle()
+
     // Handle back press gracefully
     BackHandler(
         enabled = selectedBook != null || showLibraryCard || showAddBookDialog ||
-                showFilterSortSheet || showReadingAnalytics || currentTab != MainTab.LIBRARY
+                showFilterSortSheet || showReadingAnalytics || showNotificationsSheet ||
+                showNfcCheckoutDialog || selectedCheckoutForMessage != null || currentTab != MainTab.LIBRARY
     ) {
         when {
+            selectedCheckoutForMessage != null -> viewModel.setSelectedCheckoutForMessage(null)
+            showNfcCheckoutDialog -> viewModel.setShowNfcCheckoutDialog(false)
+            showNotificationsSheet -> viewModel.setShowNotificationsSheet(false)
             selectedBook != null -> viewModel.selectBook(null)
             showFilterSortSheet -> viewModel.setShowFilterSortSheet(false)
             showReadingAnalytics -> viewModel.setShowReadingAnalytics(false)
@@ -204,11 +214,18 @@ fun MainScreen(viewModel: MainViewModel) {
                     topRatedBooks = topRatedBooks,
                     adaptiveRecommendations = adaptiveRecommendations,
                     isLoadingRecommendations = isLoadingRecommendations,
+                    checkouts = allCheckouts,
+                    pendingAlertsCount = pendingAlertsCount,
                     onFilterChange = { viewModel.setLibraryFilter(it) },
                     onSelectBook = { viewModel.selectBook(it) },
                     onOpenLibraryCard = { viewModel.setShowLibraryCard(true) },
                     onOpenFilterSort = { viewModel.setShowFilterSortSheet(true) },
                     onOpenAnalytics = { viewModel.setShowReadingAnalytics(true) },
+                    onOpenNotifications = { viewModel.setShowNotificationsSheet(true) },
+                    onOpenNfcCheckout = { book -> viewModel.setShowNfcCheckoutDialog(true, book) },
+                    onOpenMessageForCheckout = { checkout -> viewModel.setSelectedCheckoutForMessage(checkout) },
+                    onMarkCheckoutReturned = { checkoutId -> viewModel.markCheckoutReturned(checkoutId) },
+                    onToggleFollowAuthor = { author -> viewModel.toggleFollowAuthor(author) },
                     onAddNewBook = { viewModel.setShowAddBookDialog(true) },
                     onRefreshRecommendations = { viewModel.refreshAdaptiveRecommendations() },
                     onAddRecommendationToLibrary = { rec ->
@@ -230,7 +247,9 @@ fun MainScreen(viewModel: MainViewModel) {
                     onAddToLibrary = { result, status, type, isCheckedOut, lib, due ->
                         viewModel.addScannedOrSearchResultToLibrary(result, status, type, isCheckedOut, lib, due)
                     },
-                    onRefreshRecommendations = { viewModel.refreshAdaptiveRecommendations() }
+                    onRefreshRecommendations = { viewModel.refreshAdaptiveRecommendations() },
+                    onIsAuthorFollowed = { author -> userProfile?.isFollowingAuthor(author) == true },
+                    onToggleFollowAuthor = { author -> viewModel.toggleFollowAuthor(author) }
                 )
                 MainTab.FRIENDS -> FriendsScreen(
                     friends = friends,
@@ -238,6 +257,7 @@ fun MainScreen(viewModel: MainViewModel) {
                     activityFeed = activityFeed,
                     activitySortOrder = activitySortOrder,
                     onAddFriend = { viewModel.addFriend(it) },
+                    onAddFullFriend = { u, d, r, p, c -> viewModel.addFullFriend(u, d, r, p, c) },
                     onLikeActivity = { viewModel.toggleLikeActivity(it) },
                     onAddComment = { id, text -> viewModel.addCommentToActivity(id, text) },
                     onToggleActivitySort = { viewModel.toggleActivitySortOrder() }
@@ -260,7 +280,9 @@ fun MainScreen(viewModel: MainViewModel) {
                     },
                     onOpenLibraryCard = { viewModel.setShowLibraryCard(true) },
                     onOpenAnalytics = { viewModel.setShowReadingAnalytics(true) },
-                    onSaveProfile = { viewModel.saveUserProfile(it) }
+                    onSaveProfile = { viewModel.saveUserProfile(it) },
+                    onClearAllMessages = { viewModel.clearAllNeighborhoodMessages() },
+                    onOpenWelcomeLogin = { viewModel.openWelcomeLogin() }
                 )
             }
         }
@@ -296,6 +318,14 @@ fun MainScreen(viewModel: MainViewModel) {
             },
             onUpdateUserRating = { rating ->
                 viewModel.updateUserRating(book.id, rating)
+            },
+            isAuthorFollowed = userProfile?.isFollowingAuthor(book.author) == true,
+            onToggleFollowAuthor = { author ->
+                viewModel.toggleFollowAuthor(author)
+            },
+            onStartNfcCheckout = { b ->
+                viewModel.selectBook(null)
+                viewModel.setShowNfcCheckoutDialog(true, b)
             }
         )
     }
@@ -340,6 +370,77 @@ fun MainScreen(viewModel: MainViewModel) {
         AddBookDialog(
             onDismiss = { viewModel.setShowAddBookDialog(false) },
             onSaveBook = { book -> viewModel.addBook(book) }
+        )
+    }
+
+    // Sheet: Notifications & Neighborhood Alerts
+    if (showNotificationsSheet) {
+        NotificationsAlertsSheet(
+            checkouts = allCheckouts,
+            onDismiss = { viewModel.setShowNotificationsSheet(false) },
+            onOpenMessage = { co ->
+                viewModel.setShowNotificationsSheet(false)
+                viewModel.setSelectedCheckoutForMessage(co)
+            },
+            onMarkReturned = { id ->
+                viewModel.markCheckoutReturned(id)
+            },
+            onNewNfcCheckout = {
+                viewModel.setShowNotificationsSheet(false)
+                viewModel.setShowNfcCheckoutDialog(true, null)
+            }
+        )
+    }
+
+    // Dialog: NFC Neighborhood Checkout
+    if (showNfcCheckoutDialog) {
+        NfcCheckoutDialog(
+            initialBook = selectedBookForNfcCheckout,
+            availableBooks = books,
+            onDismiss = { viewModel.setShowNfcCheckoutDialog(false) },
+            onConfirmCheckout = { title, author, cover, person, role, durationDays, nfcTag, notes, bookId ->
+                viewModel.startNeighborhoodCheckout(
+                    bookTitle = title,
+                    bookAuthor = author,
+                    bookCoverUrl = cover,
+                    personName = person,
+                    role = role,
+                    returnDurationDays = durationDays,
+                    nfcTagId = nfcTag,
+                    notes = notes,
+                    bookId = bookId
+                )
+            }
+        )
+    }
+
+    // Sheet: Neighborhood Direct In-App Messaging
+    selectedCheckoutForMessage?.let { co ->
+        val checkoutMessages by viewModel.getMessagesForCheckout(co.id).collectAsStateWithLifecycle(emptyList())
+        NeighborhoodMessageSheet(
+            checkout = co,
+            messages = checkoutMessages,
+            myUsername = userProfile?.name ?: "Morgan",
+            onSendMessage = { text ->
+                viewModel.sendNeighborhoodMessage(co.id, text)
+            },
+            onDismiss = { viewModel.setSelectedCheckoutForMessage(null) }
+        )
+    }
+
+    // Welcome Pop-up Login Dialog: Shows on first entering app if no username created yet
+    val shouldShowWelcome = !hasDismissedWelcomeLogin && (userProfile?.username.isNullOrBlank()) && (userProfile?.hasCompletedWelcome != true)
+    if (shouldShowWelcome) {
+        WelcomeLoginDialog(
+            initialUsername = userProfile?.username ?: "",
+            initialName = userProfile?.name ?: "Morgan Reed",
+            initialEmail = userProfile?.email ?: "",
+            onSaveAccount = { username, name, email, genres, authors ->
+                viewModel.saveWelcomeLogin(username, name, email, genres, authors)
+            },
+            onContinueAsGuest = {
+                viewModel.dismissWelcomeLogin()
+            }
         )
     }
 }

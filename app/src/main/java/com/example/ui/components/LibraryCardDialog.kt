@@ -387,6 +387,23 @@ fun LibraryCardDialog(
                             fontSize = 10.sp,
                             color = TextSecondary
                         )
+
+                        val followed = user.getFollowedAuthorsList()
+                        if (followed.isNotEmpty()) {
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.Favorite, contentDescription = null, tint = Color(0xFFE91E63), modifier = Modifier.size(12.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "Followed: ${followed.joinToString(", ")}",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF880E4F),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
                     }
                 }
 

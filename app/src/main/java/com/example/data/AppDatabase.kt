@@ -11,9 +11,11 @@ import androidx.room.RoomDatabase
         NoteEntity::class,
         FriendEntity::class,
         EventEntity::class,
-        UserProfileEntity::class
+        UserProfileEntity::class,
+        NeighborhoodCheckoutEntity::class,
+        NeighborhoodMessageEntity::class
     ],
-    version = 3,
+    version = 5,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -22,6 +24,8 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun friendDao(): FriendDao
     abstract fun eventDao(): EventDao
     abstract fun userProfileDao(): UserProfileDao
+    abstract fun neighborhoodCheckoutDao(): NeighborhoodCheckoutDao
+    abstract fun neighborhoodMessageDao(): NeighborhoodMessageDao
 
     companion object {
         @Volatile

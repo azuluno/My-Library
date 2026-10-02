@@ -46,6 +46,9 @@ data class BookEntity(
     val dueDate: String? = null,
     val genre: String = "General Fiction",
     val publicationYear: Int = 2022,
+    val nfcTagId: String? = null, // Optional NFC tag attached to the physical book
+    val neighborhoodBorrower: String? = null, // Friend/neighbor who checked it out
+    val neighborhoodDueDate: Long? = null, // Neighborhood return due timestamp
     val dateAdded: Long = System.currentTimeMillis(),
     val lastUpdated: Long = System.currentTimeMillis()
 ) {

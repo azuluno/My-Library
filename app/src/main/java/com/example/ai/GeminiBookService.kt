@@ -21,12 +21,12 @@ import java.util.concurrent.TimeUnit
 data class BookAnalysisResult(
     val title: String,
     val author: String,
-    val synopsis: String,
-    val rating: Double,
-    val ratingSource: String,
-    val ratingCount: Int,
-    val totalPages: Int,
-    val genre: String,
+    val synopsis: String = "",
+    val rating: Double = 0.0,
+    val ratingSource: String = "Goodreads",
+    val ratingCount: Int = 0,
+    val totalPages: Int = 300,
+    val genre: String = "Fiction",
     val coverUrl: String = ""
 )
 

@@ -13,12 +13,104 @@ class BookRepository(private val db: AppDatabase) {
     private val friendDao = db.friendDao()
     private val eventDao = db.eventDao()
     private val profileDao = db.userProfileDao()
+    private val checkoutDao = db.neighborhoodCheckoutDao()
+    private val messageDao = db.neighborhoodMessageDao()
 
     val allBooks: Flow<List<BookEntity>> = bookDao.getAllBooks()
     val checkedOutBooks: Flow<List<BookEntity>> = bookDao.getCheckedOutBooks()
     val allFriends: Flow<List<FriendEntity>> = friendDao.getAllFriends()
     val allEvents: Flow<List<EventEntity>> = eventDao.getAllEvents()
     val userProfile: Flow<UserProfileEntity?> = profileDao.getProfile()
+    val allCheckouts: Flow<List<NeighborhoodCheckoutEntity>> = checkoutDao.getAllCheckouts()
+    val activeCheckouts: Flow<List<NeighborhoodCheckoutEntity>> = checkoutDao.getActiveCheckouts()
+    val allMessages: Flow<List<NeighborhoodMessageEntity>> = messageDao.getAllMessages()
+
+    fun getMessagesForCheckout(checkoutId: Long): Flow<List<NeighborhoodMessageEntity>> =
+        messageDao.getMessagesForCheckout(checkoutId)
+
+    suspend fun insertCheckout(checkout: NeighborhoodCheckoutEntity): Long = withContext(Dispatchers.IO) {
+        val id = checkoutDao.insertCheckout(checkout)
+        if (checkout.bookId != null) {
+            val book = bookDao.getBookByIdSync(checkout.bookId)
+            if (book != null) {
+                bookDao.updateBook(
+                    book.copy(
+                        isCheckedOut = true,
+                        neighborhoodBorrower = checkout.personName,
+                        neighborhoodDueDate = checkout.dueDateMillis,
+                        nfcTagId = checkout.nfcTagId
+                    )
+                )
+            }
+        }
+        id
+    }
+
+    suspend fun markCheckoutReturned(checkoutId: Long) = withContext(Dispatchers.IO) {
+        val checkout = checkoutDao.getCheckoutById(checkoutId)
+        if (checkout != null) {
+            val updated = checkout.copy(isReturned = true)
+            checkoutDao.updateCheckout(updated)
+            if (checkout.bookId != null) {
+                val book = bookDao.getBookByIdSync(checkout.bookId)
+                if (book != null) {
+                    bookDao.updateBook(
+                        book.copy(
+                            isCheckedOut = false,
+                            neighborhoodBorrower = null,
+                            neighborhoodDueDate = null
+                        )
+                    )
+                }
+            }
+            // Auto delete messages if preference enabled
+            val profile = profileDao.getProfileSync()
+            if (profile?.autoDeleteMessages == true) {
+                messageDao.deleteMessagesForCheckout(checkoutId)
+            }
+        }
+    }
+
+    suspend fun deleteCheckout(checkout: NeighborhoodCheckoutEntity) = withContext(Dispatchers.IO) {
+        messageDao.deleteMessagesForCheckout(checkout.id)
+        checkoutDao.deleteCheckout(checkout)
+    }
+
+    suspend fun sendNeighborhoodMessage(checkoutId: Long, senderName: String, recipientName: String, text: String): Long = withContext(Dispatchers.IO) {
+        messageDao.insertMessage(
+            NeighborhoodMessageEntity(
+                checkoutId = checkoutId,
+                senderName = senderName,
+                recipientName = recipientName,
+                text = text,
+                timestampMillis = System.currentTimeMillis(),
+                isFromMe = true
+            )
+        )
+    }
+
+    suspend fun toggleFollowAuthor(authorName: String) = withContext(Dispatchers.IO) {
+        val profile = profileDao.getProfileSync() ?: UserProfileEntity()
+        val currentList = profile.getFollowedAuthorsList().toMutableList()
+        val clean = authorName.trim()
+        val existingIndex = currentList.indexOfFirst { it.equals(clean, ignoreCase = true) }
+        if (existingIndex >= 0) {
+            currentList.removeAt(existingIndex)
+        } else {
+            currentList.add(clean)
+        }
+        val updated = profile.copy(followedAuthors = currentList.joinToString(", "))
+        profileDao.saveProfile(updated)
+    }
+
+    suspend fun setAutoDeleteMessages(enabled: Boolean) = withContext(Dispatchers.IO) {
+        val profile = profileDao.getProfileSync() ?: UserProfileEntity()
+        profileDao.saveProfile(profile.copy(autoDeleteMessages = enabled))
+    }
+
+    suspend fun clearAllNeighborhoodMessages() = withContext(Dispatchers.IO) {
+        messageDao.deleteAllMessages()
+    }
 
     suspend fun getBookById(id: Long): BookEntity? = withContext(Dispatchers.IO) {
         bookDao.getBookByIdSync(id)
@@ -95,12 +187,31 @@ class BookRepository(private val db: AppDatabase) {
         )
     }
 
+    suspend fun addFriendWithDetails(
+        username: String,
+        name: String,
+        readingTitle: String,
+        progress: Int,
+        chapter: String = "Chapter 1"
+    ): Long = withContext(Dispatchers.IO) {
+        friendDao.insertFriend(
+            FriendEntity(
+                username = username,
+                displayName = name,
+                currentlyReadingTitle = readingTitle,
+                currentlyReadingProgress = progress,
+                currentlyReadingChapter = chapter,
+                isFriend = true
+            )
+        )
+    }
+
     suspend fun toggleSaveEvent(id: Long, isSaved: Boolean) = withContext(Dispatchers.IO) {
         eventDao.updateSavedStatus(id, isSaved)
     }
 
     suspend fun saveProfile(profile: UserProfileEntity) = withContext(Dispatchers.IO) {
-        profileDao.saveProfile(profile)
+        profileDao.saveProfile(profile.copy(id = 1))
     }
 
     suspend fun seedInitialDataIfEmpty() = withContext(Dispatchers.IO) {
@@ -463,7 +574,66 @@ class BookRepository(private val db: AppDatabase) {
                     locationZip = "92101",
                     cardNumber = "LIB-7842-SD",
                     memberSince = "2024",
-                    dailyReadingGoalMinutes = 30
+                    dailyReadingGoalMinutes = 30,
+                    followedAuthors = "Emily Henry, Andy Weir"
+                )
+            )
+        }
+
+        // Neighborhood Checkouts
+        val existingCheckouts = checkoutDao.getAllCheckouts().firstOrNull()
+        if (existingCheckouts.isNullOrEmpty()) {
+            val now = System.currentTimeMillis()
+            val twoWeeksMillis = 14L * 24 * 60 * 60 * 1000
+            val oneMonthMillis = 30L * 24 * 60 * 60 * 1000
+
+            val co1 = NeighborhoodCheckoutEntity(
+                nfcTagId = "NFC-7482-TH",
+                bookTitle = "The Silent Patient",
+                bookAuthor = "Alex Michaelides",
+                bookCoverUrl = "https://images.unsplash.com/photo-1544947950-fa07a98d237f?w=400&q=80",
+                personName = "Sarah Jenkins",
+                role = CheckoutRole.LENT_TO_FRIEND.name,
+                checkoutDateMillis = now - (10L * 24 * 60 * 60 * 1000),
+                returnDurationDays = 14,
+                dueDateMillis = now + (4L * 24 * 60 * 60 * 1000), // Due in 4 days!
+                isReturned = false,
+                notes = "Lent at neighborhood book club"
+            )
+            val id1 = checkoutDao.insertCheckout(co1)
+            messageDao.insertMessage(
+                NeighborhoodMessageEntity(
+                    checkoutId = id1,
+                    senderName = "Sarah Jenkins",
+                    recipientName = "Morgan Reed",
+                    text = "Hey Morgan! Loving The Silent Patient so far, almost finished with chapter 20!",
+                    timestampMillis = now - (2L * 24 * 60 * 60 * 1000),
+                    isFromMe = false
+                )
+            )
+
+            val co2 = NeighborhoodCheckoutEntity(
+                nfcTagId = "NFC-9104-RO",
+                bookTitle = "Beach Read",
+                bookAuthor = "Emily Henry",
+                bookCoverUrl = "https://images.unsplash.com/photo-1516979187457-637abb4f9353?w=400&q=80",
+                personName = "David Miller",
+                role = CheckoutRole.BORROWED_FROM_NEIGHBOR.name,
+                checkoutDateMillis = now - (5L * 24 * 60 * 60 * 1000),
+                returnDurationDays = 30,
+                dueDateMillis = now + (25L * 24 * 60 * 60 * 1000),
+                isReturned = false,
+                notes = "Borrowed from 4th floor neighbor"
+            )
+            val id2 = checkoutDao.insertCheckout(co2)
+            messageDao.insertMessage(
+                NeighborhoodMessageEntity(
+                    checkoutId = id2,
+                    senderName = "Morgan Reed",
+                    recipientName = "David Miller",
+                    text = "Thanks for letting me borrow Beach Read, David! Will take good care of it.",
+                    timestampMillis = now - (4L * 24 * 60 * 60 * 1000),
+                    isFromMe = true
                 )
             )
         }

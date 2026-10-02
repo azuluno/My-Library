@@ -57,7 +57,9 @@ fun SearchScanScreen(
     onScanImage: (Bitmap) -> Unit,
     onClearScannedResult: () -> Unit,
     onAddToLibrary: (BookAnalysisResult, BookStatus, ItemType, Boolean, String?, String?) -> Unit,
-    onRefreshRecommendations: () -> Unit = {}
+    onRefreshRecommendations: () -> Unit = {},
+    onIsAuthorFollowed: (String) -> Boolean = { false },
+    onToggleFollowAuthor: (String) -> Unit = {}
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -483,11 +485,26 @@ fun SearchScanScreen(
                                     fontWeight = FontWeight.Bold,
                                     color = TextPrimary
                                 )
-                                Text(
-                                    text = "by ${result.author}",
-                                    fontSize = 12.sp,
-                                    color = TextSecondary
-                                )
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        text = "by ${result.author}",
+                                        fontSize = 12.sp,
+                                        color = TextSecondary
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    val isFollowed = onIsAuthorFollowed(result.author)
+                                    IconButton(
+                                        onClick = { onToggleFollowAuthor(result.author) },
+                                        modifier = Modifier.size(20.dp).testTag("search_heart_${result.author}")
+                                    ) {
+                                        Icon(
+                                            imageVector = if (isFollowed) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                                            contentDescription = if (isFollowed) "Unfollow Author" else "Follow Author",
+                                            tint = if (isFollowed) Color(0xFFE91E63) else Color.Gray,
+                                            modifier = Modifier.size(14.dp)
+                                        )
+                                    }
+                                }
                                 Spacer(modifier = Modifier.height(4.dp))
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Icon(Icons.Default.Star, contentDescription = null, tint = LibraryGold, modifier = Modifier.size(13.dp))

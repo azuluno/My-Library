@@ -20,7 +20,8 @@ data class AdaptiveTasteProfile(
     val evolvingSummary: String,
     val ratedBooksCount: Int,
     val avgUserRating: Double,
-    val declaredPreferences: List<String>
+    val declaredPreferences: List<String>,
+    val followedAuthors: List<String> = emptyList()
 )
 
 object AdaptiveTasteEngine {
@@ -28,9 +29,10 @@ object AdaptiveTasteEngine {
     /**
      * Dynamically learns the user's reading taste based on:
      * 1. Declared preferences in their Library Card / Profile
-     * 2. What they are currently reading, want to read, and finished
-     * 3. How frequently and recently they read certain styles (e.g., shifting into Thrillers & Mysteries)
-     * 4. Personal star ratings given to books (higher ratings boost genre affinity)
+     * 2. Followed authors (chosen in preferences or heart-clicked on books)
+     * 3. What they are currently reading, want to read, and finished
+     * 4. How frequently and recently they read certain styles (e.g., shifting into Thrillers & Mysteries)
+     * 5. Personal star ratings given to books (higher ratings boost genre affinity)
      */
     fun analyzeTaste(books: List<BookEntity>, profile: UserProfileEntity?): AdaptiveTasteProfile {
         val declared = profile?.preferredStyles
@@ -38,6 +40,8 @@ object AdaptiveTasteEngine {
             ?.map { it.trim() }
             ?.filter { it.isNotBlank() }
             .orEmpty()
+
+        val followed = profile?.getFollowedAuthorsList().orEmpty()
 
         val genreScores = mutableMapOf<String, Float>()
         val genreBookCounts = mutableMapOf<String, Int>()
@@ -69,74 +73,78 @@ object AdaptiveTasteEngine {
                 else -> 5f
             }
 
-            // Recency boost
-            if (index < recentCutoffIndex) {
-                weight *= 1.35f
+            // Recency multiplier: the most recent 3 books have 1.5x influence
+            if (index < 3) {
+                weight *= 1.5f
             }
 
-            // 3. User rating influence
+            // User personal star rating influence (1.0 to 5.0)
             if (book.userRating != null) {
-                genreRatings.getOrPut(normGenre) { mutableListOf() }.add(book.userRating)
-                when {
-                    book.userRating >= 4.5 -> weight += 18f // Major positive boost
-                    book.userRating >= 4.0 -> weight += 10f
-                    book.userRating >= 3.0 -> weight += 4f
-                    else -> weight -= 5f // Low rating lowers affinity
+                val ratingScore = book.userRating
+                genreRatings.getOrPut(normGenre) { mutableListOf() }.add(ratingScore)
+                // High rating boosts affinity heavily; low rating reduces it
+                weight *= when {
+                    ratingScore >= 4.5 -> 1.8f
+                    ratingScore >= 4.0 -> 1.4f
+                    ratingScore >= 3.0 -> 1.0f
+                    else -> 0.5f // Disliked book dampens genre preference
                 }
+            }
+
+            // Followed author bonus: if book is by a followed author, gives additional weight
+            if (followed.any { book.author.contains(it, ignoreCase = true) }) {
+                weight *= 1.4f
             }
 
             genreScores[normGenre] = (genreScores[normGenre] ?: 0f) + weight
         }
 
+        // If user has zero books and zero declared, fallback to standard defaults
+        if (genreScores.isEmpty()) {
+            genreScores["Mystery & Thriller"] = 25f
+            genreScores["Fiction"] = 20f
+        }
+
         val totalScore = genreScores.values.sum().coerceAtLeast(1f)
+
         val sortedGenres = genreScores.entries
             .sortedByDescending { it.value }
+            .take(6)
             .map { (genre, score) ->
-                val count = genreBookCounts[genre] ?: 0
-                val ratings = genreRatings[genre].orEmpty()
-                val avgRating = if (ratings.isNotEmpty()) ratings.average() else null
+                val ratings = genreRatings[genre]
+                val avgRating = if (!ratings.isNullOrEmpty()) ratings.average() else null
                 val pct = ((score / totalScore) * 100).toInt().coerceIn(1, 100)
-                val isDeclared = declared.any { normalizeGenre(it) == genre }
                 val isRecent = genreRecent.contains(genre)
+                val isDeclared = declared.any { normalizeGenre(it).equals(genre, ignoreCase = true) }
 
                 LearnedGenreAffinity(
                     genre = genre,
                     affinityScore = score,
                     percentage = pct,
-                    bookCount = count,
+                    bookCount = genreBookCounts[genre] ?: 0,
                     avgUserRating = avgRating,
                     isFromRecentReads = isRecent,
                     isFromLibraryCard = isDeclared
                 )
             }
 
+        // Detect primary reading focus and evolving summary
+        val top1 = sortedGenres.firstOrNull()?.genre ?: "Diverse Fiction"
+        val top2 = sortedGenres.getOrNull(1)?.genre
+
+        val primaryFocus = if (top2 != null) "$top1 & $top2" else top1
+
+        val hasRecentShift = sortedGenres.any { it.isFromRecentReads && !it.isFromLibraryCard }
+        val evolvingSummary = when {
+            hasRecentShift -> "Your reading patterns have shifted towards $top1 based on your recent books & ratings."
+            sortedGenres.isNotEmpty() -> "Reflecting your favorite categories from your library card and your top-rated reads."
+            else -> "Personalizing based on your reading progress and bookshelf additions."
+        }
+
         val ratedBooks = books.filter { it.userRating != null }
         val overallAvgRating = if (ratedBooks.isNotEmpty()) {
             ratedBooks.mapNotNull { it.userRating }.average()
         } else 0.0
-
-        val topNames = sortedGenres.take(3).map { it.genre }
-        val primaryFocus = when {
-            topNames.size >= 2 -> "${topNames[0]} & ${topNames[1]}"
-            topNames.isNotEmpty() -> topNames[0]
-            else -> "Eclectic Fiction"
-        }
-
-        val evolvingSummary = buildString {
-            if (topNames.isNotEmpty()) {
-                append("Primary affinity in ${topNames.joinToString(", ")}. ")
-            }
-            if (genreRecent.isNotEmpty()) {
-                val recents = genreRecent.take(2).joinToString(" & ")
-                append("Recently reading more $recents. ")
-            }
-            if (declared.isNotEmpty()) {
-                append("Library card preferences: ${declared.joinToString(", ")}. ")
-            }
-            if (ratedBooks.isNotEmpty()) {
-                append("${ratedBooks.size} books rated (avg ${"%.1f".format(overallAvgRating)}★).")
-            }
-        }
 
         return AdaptiveTasteProfile(
             topGenres = sortedGenres,
@@ -144,12 +152,13 @@ object AdaptiveTasteEngine {
             evolvingSummary = evolvingSummary,
             ratedBooksCount = ratedBooks.size,
             avgUserRating = overallAvgRating,
-            declaredPreferences = declared
+            declaredPreferences = declared,
+            followedAuthors = followed
         )
     }
 
     /**
-     * Clean/normalize genre strings (e.g. "Psychological Thriller / Suspense" -> "Thriller")
+     * Clean/normalize genre strings
      */
     fun normalizeGenre(raw: String): String {
         val clean = raw.trim()
@@ -170,8 +179,8 @@ object AdaptiveTasteEngine {
     }
 
     /**
-     * Ranks books or search results based on user's learned taste.
-     * Genres with high affinity appear FIRST.
+     * Ranks books or search results based on user's learned taste and followed authors.
+     * Followed authors and high affinity genres appear FIRST.
      */
     fun rankResults(
         items: List<BookAnalysisResult>,
@@ -185,6 +194,11 @@ object AdaptiveTasteEngine {
             val norm = normalizeGenre(book.genre).lowercase()
             var score = genreRankMap[norm] ?: 0f
 
+            // Bonus for followed authors (+50 points so they populate up higher!)
+            if (profile.followedAuthors.any { author -> book.author.contains(author, ignoreCase = true) }) {
+                score += 50f
+            }
+
             // Also check partial matches
             for ((g, bonus) in genreRankMap) {
                 if (norm.contains(g) || book.synopsis.lowercase().contains(g)) {
@@ -196,5 +210,37 @@ object AdaptiveTasteEngine {
             score += (book.rating.toFloat() * 1.5f)
             score
         }
+    }
+
+    /**
+     * Ranks books in the user's library when opening the app.
+     * Followed authors populate up first (+100 score), followed by current reading & top genre affinity.
+     */
+    fun rankLibraryBooks(
+        books: List<BookEntity>,
+        profile: AdaptiveTasteProfile?
+    ): List<BookEntity> {
+        if (profile == null) return books
+
+        val followed = profile.followedAuthors
+        val genreMap = profile.topGenres.associate { normalizeGenre(it.genre).lowercase() to it.affinityScore }
+
+        return books.sortedWith(
+            compareByDescending<BookEntity> { book ->
+                // Priority 1: Followed author (+100)
+                if (followed.any { book.author.contains(it, ignoreCase = true) }) 100f else 0f
+            }.thenByDescending { book ->
+                // Priority 2: Status (Currently reading first)
+                if (book.status == BookStatus.CURRENTLY_READING.name) 50f else 0f
+            }.thenByDescending { book ->
+                // Priority 3: Genre Affinity Score
+                genreMap[normalizeGenre(book.genre).lowercase()] ?: 0f
+            }.thenByDescending { book ->
+                // Priority 4: User personal rating or general rating
+                (book.userRating ?: book.rating).toFloat()
+            }.thenByDescending { book ->
+                book.lastUpdated
+            }
+        )
     }
 }

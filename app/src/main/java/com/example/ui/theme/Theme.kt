@@ -33,7 +33,7 @@ private val LightColorScheme = lightColorScheme(
 
 private val DarkColorScheme = darkColorScheme(
     primary = LibraryMint,
-    onPrimary = LibraryForestGreen,
+    onPrimary = Color.White,
     primaryContainer = LibraryEmerald,
     onPrimaryContainer = Color(0xFFE8F5E9),
     secondary = LibraryGold,

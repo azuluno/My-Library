@@ -47,7 +47,10 @@ fun BookDetailSheet(
     onDeleteNote: (NoteEntity) -> Unit,
     onDeleteBook: (BookEntity) -> Unit,
     onUpdateStatus: (BookStatus) -> Unit,
-    onUpdateUserRating: (Double) -> Unit
+    onUpdateUserRating: (Double) -> Unit,
+    isAuthorFollowed: Boolean = false,
+    onToggleFollowAuthor: (String) -> Unit = {},
+    onStartNfcCheckout: (BookEntity) -> Unit = {}
 ) {
     var showAddNoteDialog by remember { mutableStateOf(false) }
     var editPageText by remember(book.currentPage) { mutableStateOf(book.currentPage.toString()) }
@@ -159,11 +162,43 @@ fun BookDetailSheet(
                             overflow = TextOverflow.Ellipsis
                         )
 
-                        Text(
-                            text = "by ${book.author}",
-                            fontSize = 13.sp,
-                            color = TextSecondary
-                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "by ${book.author}",
+                                fontSize = 13.sp,
+                                color = TextSecondary
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            IconButton(
+                                onClick = { onToggleFollowAuthor(book.author) },
+                                modifier = Modifier
+                                    .size(24.dp)
+                                    .testTag("detail_follow_author_heart")
+                            ) {
+                                Icon(
+                                    imageVector = if (isAuthorFollowed) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                                    contentDescription = if (isAuthorFollowed) "Unfollow Author" else "Follow Author",
+                                    tint = if (isAuthorFollowed) Color(0xFFE91E63) else Color.Gray,
+                                    modifier = Modifier.size(17.dp)
+                                )
+                            }
+                            if (isAuthorFollowed) {
+                                Surface(
+                                    shape = RoundedCornerShape(4.dp),
+                                    color = Color(0xFFFFEBEE)
+                                ) {
+                                    Text(
+                                        text = "Followed",
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFFC2185B),
+                                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                                    )
+                                }
+                            }
+                        }
 
                         Spacer(modifier = Modifier.height(8.dp))
 
@@ -234,6 +269,61 @@ fun BookDetailSheet(
                                 )
                             }
                         }
+                    }
+                }
+            }
+
+            // NFC Tag & Neighborhood Lending Action Button
+            item {
+                Spacer(modifier = Modifier.height(10.dp))
+                OutlinedCard(
+                    onClick = { onStartNfcCheckout(book) },
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.outlinedCardColors(containerColor = Color(0xFFF6F8F5)),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFD6E4D6)),
+                    modifier = Modifier.fillMaxWidth().testTag("detail_nfc_checkout_button")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Surface(
+                                shape = CircleShape,
+                                color = LibraryForestGreen.copy(alpha = 0.15f),
+                                modifier = Modifier.size(32.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = Icons.Default.Nfc,
+                                        contentDescription = null,
+                                        tint = LibraryForestGreen,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column {
+                                Text(
+                                    text = if (book.neighborhoodBorrower != null) "Lent to ${book.neighborhoodBorrower}" else "NFC Neighborhood Checkout",
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = LibraryForestGreen
+                                )
+                                Text(
+                                    text = if (book.nfcTagId != null) "Tag: ${book.nfcTagId} • Tap to manage" else "Check out to a friend with an NFC tag",
+                                    fontSize = 11.sp,
+                                    color = Color.Gray
+                                )
+                            }
+                        }
+
+                        Icon(
+                            imageVector = Icons.Default.ChevronRight,
+                            contentDescription = null,
+                            tint = LibraryForestGreen
+                        )
                     }
                 }
             }

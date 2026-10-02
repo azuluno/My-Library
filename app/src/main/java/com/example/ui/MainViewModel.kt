@@ -144,6 +144,187 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _activitySortOrder = MutableStateFlow(SortDirection.DESCENDING)
     val activitySortOrder: StateFlow<SortDirection> = _activitySortOrder.asStateFlow()
 
+    // Neighborhood Checkouts & In-App Direct Messages
+    val allCheckouts: StateFlow<List<NeighborhoodCheckoutEntity>> = repository.allCheckouts
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val activeCheckouts: StateFlow<List<NeighborhoodCheckoutEntity>> = repository.activeCheckouts
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val allMessages: StateFlow<List<NeighborhoodMessageEntity>> = repository.allMessages
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    private val _showNotificationsSheet = MutableStateFlow(false)
+    val showNotificationsSheet: StateFlow<Boolean> = _showNotificationsSheet.asStateFlow()
+
+    private val _showNfcCheckoutDialog = MutableStateFlow(false)
+    val showNfcCheckoutDialog: StateFlow<Boolean> = _showNfcCheckoutDialog.asStateFlow()
+
+    private val _selectedCheckoutForMessage = MutableStateFlow<NeighborhoodCheckoutEntity?>(null)
+    val selectedCheckoutForMessage: StateFlow<NeighborhoodCheckoutEntity?> = _selectedCheckoutForMessage.asStateFlow()
+
+    private val _selectedBookForNfcCheckout = MutableStateFlow<BookEntity?>(null)
+    val selectedBookForNfcCheckout: StateFlow<BookEntity?> = _selectedBookForNfcCheckout.asStateFlow()
+
+    val pendingAlertsCount: StateFlow<Int> = repository.activeCheckouts
+        .map { list -> list.count { it.isOverdue || it.isDueSoon } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
+
+    // Welcome pop-up login on first entering the app if user hasn't created a username
+    private val _hasDismissedWelcomeLogin = MutableStateFlow(false)
+    val hasDismissedWelcomeLogin: StateFlow<Boolean> = _hasDismissedWelcomeLogin.asStateFlow()
+
+    fun dismissWelcomeLogin() {
+        _hasDismissedWelcomeLogin.value = true
+        viewModelScope.launch {
+            val current = userProfile.value ?: UserProfileEntity()
+            repository.saveProfile(current.copy(hasCompletedWelcome = true, isGuest = true))
+        }
+    }
+
+    fun openWelcomeLogin() {
+        _hasDismissedWelcomeLogin.value = false
+    }
+
+    fun saveWelcomeLogin(username: String, name: String, email: String, genres: String, followedAuthor: String) {
+        viewModelScope.launch {
+            val cleanUsername = username.trim().filter { it.isLetterOrDigit() || it == '_' }.take(10)
+            val current = userProfile.value ?: UserProfileEntity()
+            val existing = current.getFollowedAuthorsList().toMutableList()
+            if (followedAuthor.isNotBlank()) {
+                val toAdd = followedAuthor.split(",").map { it.trim() }.filter { it.isNotBlank() }
+                toAdd.forEach { a ->
+                    if (!existing.any { it.equals(a, ignoreCase = true) }) {
+                        existing.add(a)
+                    }
+                }
+            }
+
+            val updated = current.copy(
+                id = 1,
+                username = cleanUsername,
+                name = name.ifBlank { "Morgan Reed" },
+                email = email.trim(),
+                preferredStyles = if (genres.isNotBlank()) genres else current.preferredStyles,
+                followedAuthors = existing.joinToString(", "),
+                hasCompletedWelcome = true,
+                isGuest = cleanUsername.isBlank()
+            )
+            repository.saveProfile(updated)
+            _hasDismissedWelcomeLogin.value = true
+            refreshAdaptiveRecommendations()
+        }
+    }
+
+    fun getMessagesForCheckout(checkoutId: Long): Flow<List<NeighborhoodMessageEntity>> =
+        repository.getMessagesForCheckout(checkoutId)
+
+    fun setShowNotificationsSheet(show: Boolean) {
+        _showNotificationsSheet.value = show
+    }
+
+    fun setShowNfcCheckoutDialog(show: Boolean, book: BookEntity? = null) {
+        _selectedBookForNfcCheckout.value = book
+        _showNfcCheckoutDialog.value = show
+    }
+
+    fun setSelectedCheckoutForMessage(checkout: NeighborhoodCheckoutEntity?) {
+        _selectedCheckoutForMessage.value = checkout
+    }
+
+    fun onNfcTagScanned(tagId: String) {
+        viewModelScope.launch {
+            val match = allCheckouts.value.firstOrNull { it.nfcTagId.equals(tagId, ignoreCase = true) && !it.isReturned }
+            if (match != null) {
+                _selectedCheckoutForMessage.value = match
+            } else {
+                _showNfcCheckoutDialog.value = true
+            }
+        }
+    }
+
+    fun startNeighborhoodCheckout(
+        bookTitle: String,
+        bookAuthor: String,
+        bookCoverUrl: String,
+        personName: String,
+        role: CheckoutRole,
+        returnDurationDays: Int,
+        nfcTagId: String,
+        notes: String,
+        bookId: Long?
+    ) {
+        viewModelScope.launch {
+            val now = System.currentTimeMillis()
+            val dueMillis = now + (returnDurationDays.toLong() * 24 * 60 * 60 * 1000)
+            val checkout = NeighborhoodCheckoutEntity(
+                nfcTagId = nfcTagId,
+                bookId = bookId,
+                bookTitle = bookTitle,
+                bookAuthor = bookAuthor,
+                bookCoverUrl = bookCoverUrl,
+                personName = personName,
+                role = role.name,
+                checkoutDateMillis = now,
+                returnDurationDays = returnDurationDays,
+                dueDateMillis = dueMillis,
+                isReturned = false,
+                notes = notes
+            )
+            repository.insertCheckout(checkout)
+            _showNfcCheckoutDialog.value = false
+        }
+    }
+
+    fun markCheckoutReturned(checkoutId: Long) {
+        viewModelScope.launch {
+            repository.markCheckoutReturned(checkoutId)
+        }
+    }
+
+    fun deleteCheckout(checkout: NeighborhoodCheckoutEntity) {
+        viewModelScope.launch {
+            repository.deleteCheckout(checkout)
+        }
+    }
+
+    fun sendNeighborhoodMessage(checkoutId: Long, text: String) {
+        viewModelScope.launch {
+            val checkout = allCheckouts.value.firstOrNull { it.id == checkoutId }
+            val myName = userProfile.value?.name ?: "Morgan"
+            val recipient = checkout?.personName ?: "Neighbor"
+            repository.sendNeighborhoodMessage(
+                checkoutId = checkoutId,
+                senderName = myName,
+                recipientName = recipient,
+                text = text
+            )
+        }
+    }
+
+    fun toggleFollowAuthor(authorName: String) {
+        viewModelScope.launch {
+            repository.toggleFollowAuthor(authorName)
+            if (_searchResults.value.isNotEmpty()) {
+                val taste = adaptiveTasteProfile.value
+                _searchResults.value = AdaptiveTasteEngine.rankResults(_searchResults.value, taste)
+            }
+            refreshAdaptiveRecommendations()
+        }
+    }
+
+    fun setAutoDeleteMessages(enabled: Boolean) {
+        viewModelScope.launch {
+            repository.setAutoDeleteMessages(enabled)
+        }
+    }
+
+    fun clearAllNeighborhoodMessages() {
+        viewModelScope.launch {
+            repository.clearAllNeighborhoodMessages()
+        }
+    }
+
     init {
         viewModelScope.launch {
             repository.seedInitialDataIfEmpty()
@@ -515,12 +696,51 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun addFriend(username: String) {
         viewModelScope.launch {
+            val cleanUsername = username.removePrefix("@").trim()
+            val cleanName = cleanUsername.replaceFirstChar { it.uppercase() }
             repository.addFriend(
-                username = username.removePrefix("@"),
-                name = username.removePrefix("@").replaceFirstChar { it.uppercase() },
+                username = cleanUsername,
+                name = cleanName,
                 readingTitle = "Dune",
                 progress = (30..80).random()
             )
+        }
+    }
+
+    fun addFullFriend(
+        username: String,
+        displayName: String,
+        readingTitle: String,
+        progress: Int = 25,
+        chapter: String = "Chapter 1"
+    ) {
+        viewModelScope.launch {
+            val cleanUsername = username.removePrefix("@").trim()
+            val cleanName = displayName.trim().ifBlank { cleanUsername.replaceFirstChar { it.uppercase() } }
+            val cleanTitle = readingTitle.trim().ifBlank { "The Midnight Library" }
+            repository.addFriendWithDetails(
+                username = cleanUsername,
+                name = cleanName,
+                readingTitle = cleanTitle,
+                progress = progress.coerceIn(0, 100),
+                chapter = chapter.ifBlank { "Chapter 1" }
+            )
+            val newFeedItem = ActivityFeedItem(
+                id = "act-${System.currentTimeMillis()}",
+                friendUsername = cleanUsername,
+                friendName = cleanName,
+                friendAvatar = "",
+                actionType = "READING",
+                bookTitle = cleanTitle,
+                bookAuthor = "Matt Haig",
+                bookCover = "https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?w=400&q=80",
+                progressPercent = progress.coerceIn(0, 100),
+                currentChapter = chapter.ifBlank { "Chapter 1" },
+                timestamp = System.currentTimeMillis(),
+                likesCount = 0,
+                comments = emptyList()
+            )
+            _activityFeed.value = listOf(newFeedItem) + _activityFeed.value
         }
     }
 
@@ -532,9 +752,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun saveUserProfile(profile: UserProfileEntity) {
         viewModelScope.launch {
-            // Enforce max 6 chars alphanumeric for username
-            val cleanUsername = profile.username.filter { it.isLetterOrDigit() }.take(6)
-            repository.saveProfile(profile.copy(username = cleanUsername))
+            val cleanUsername = profile.username.trim().filter { it.isLetterOrDigit() || it == '_' }.take(10)
+            val updated = profile.copy(
+                username = cleanUsername,
+                hasCompletedWelcome = true,
+                isGuest = cleanUsername.isBlank()
+            )
+            repository.saveProfile(updated)
+            refreshAdaptiveRecommendations()
         }
     }
 

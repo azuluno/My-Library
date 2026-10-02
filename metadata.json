@@ -1,0 +1,6 @@
+{
+  "name": "My Library",
+  "description": "Personal library app to track books and audiobooks, AI book photo identification, reading progress, library card, community friend comparisons, and local events.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
